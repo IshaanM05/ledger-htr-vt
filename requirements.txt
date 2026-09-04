@@ -1,0 +1,38 @@
+# Core
+numpy
+pandas
+scikit-learn
+scipy
+Pillow
+opencv-python
+matplotlib
+seaborn
+tqdm
+
+# Deep learning
+torch
+torchvision
+timm
+
+# HF stack (TrOCR, VLM fine-tuning)
+transformers
+accelerate
+peft
+bitsandbytes
+sentencepiece
+huggingface_hub
+
+# Augmentation
+albumentations
+
+# Metrics / text
+jiwer
+python-Levenshtein
+editdistance
+
+# Decoding / LM rescoring (optional, Phase 4)
+pyctcdecode
+https://github.com/kpu/kenlm/archive/master.zip#egg=kenlm
+
+# Experiment tracking (optional)
+tensorboard

@@ -1,0 +1,38 @@
+# Data & artifacts
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+external/*
+!external/.gitkeep
+*.zip
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+wandb/
+runs/
+lightning_logs/
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Submissions (keep local, don't accidentally commit large history of them)
+submissions/*.csv
