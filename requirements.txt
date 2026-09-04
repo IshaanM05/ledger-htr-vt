@@ -10,8 +10,12 @@ seaborn
 tqdm
 
 # Deep learning
-torch
-torchvision
+# Pinned: the installed NVIDIA driver (550.163.01) tops out at CUDA 12.4 — an
+# unpinned `torch` install can resolve to a cu13x build that silently fails
+# torch.cuda.is_available() on this machine. If reinstalling, verify
+# torch.cuda.is_available() is True afterward.
+torch==2.6.0
+torchvision==0.21.0
 timm
 
 # HF stack (TrOCR, VLM fine-tuning)
@@ -36,3 +40,6 @@ https://github.com/kpu/kenlm/archive/master.zip#egg=kenlm
 
 # Experiment tracking (optional)
 tensorboard
+
+# Testing
+pytest

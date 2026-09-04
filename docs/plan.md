@@ -11,7 +11,7 @@ A day-by-day plan from September 3rd to close, pairing what to build with what t
 | **Runway** | 33 days |
 | **Data** | 6,000 line/word crops, 18th–19th century Barbadian legal handwriting (deeds, wills, estate inventories) |
 | **Compute** | RTX 4080 Laptop, 12GB GDDR6 (not the desktop card's 16GB) |
-| **Metric** | 0.5 × weighted WER + 0.5 × weighted CER |
+| **Metric** | `1 - 0.5*(corpus CER + corpus WER)`, higher is better — corpus-level (sum of edits / sum of reference lengths), not per-sample averaged. Verified against a real submission to 8 decimal places; see the Metric section for the full derivation. |
 
 ---
 
@@ -27,19 +27,71 @@ Every point of leaderboard movement will come from:
 
 ---
 
+## Scope: what's actually required vs. what's a bet
+
+Solo, 33 days, one 12GB laptop GPU. The original version of this plan tried to schedule ten distinct techniques — that's over-committed for one person. Everything below is sorted into three tiers with explicit gates between them: don't start a Stretch item until the tier below it has already shown a real CV gain.
+
+**Must (the score doesn't exist without these):**
+- Exact metric implementation, hand-verified (Phase 1)
+- Length-stratified local CV, honestly interpreted (see Validation strategy below — no document/writer metadata exists in this dataset, so this is the best split available, not a perfect one)
+- A strong pretrained baseline: TrOCR-base-handwritten, fine-tuned properly
+- Augmentation, validated incrementally (one technique at a time against CV, not stacked blind)
+- Beam decoding
+- A 2-model ensemble
+
+**Should (build if the Must tier is solid and gate below is green):**
+- HTR-VT as the second, architecturally-different model — CTC vs. TrOCR's seq2seq gives the ensemble something real to combine, and it's a good build even if it doesn't win outright
+- Domain self-supervised (MIM) pretraining, *if the competition rules permit using unlabeled test images this way* — verify this explicitly before running it; if unclear, pretrain on training images only
+
+**Stretch (gate each individually — only proceed if the tier it depends on already helped):**
+- One-DM style-conditioned synthesis (gated on: does augmentation alone already show diminishing CV returns?)
+- VLM QLoRA fine-tune (gated on: does the 2-model ensemble leave clear error patterns a VLM's general visual-text prior might fix? Treat as a last-resort diversity source, not a central phase — general VLMs are prone to plausible-looking hallucinated words on historical handwriting)
+- LLM post-OCR correction (gated on: does a much cheaper, safer rule-based confusion-correction layer — u/v, i/j, long-s style confusions — already fail to close the gap?)
+- Ensemble → single-model distillation (gated on: does the ensemble clearly beat every individual member on CV? If not, distillation just adds complexity for no proven benefit.)
+
+If a Stretch item's gate isn't green by the time you'd start it in the schedule below, skip it and reinvest that time into decoding, error analysis, or reproducibility instead — those are Must-tier and always pay off.
+
+---
+
+## Rules & chat findings (verified 2026-09-04)
+
+A full pass through the official rules page and every discussion thread on the competition's Chat tab, done after the first real submission surfaced questions the original version of this plan hadn't resolved. Findings below are organizer-confirmed unless marked otherwise.
+
+**Data quality — actionable now:**
+- **21 known-corrupted training rows** (image/label mismatches, empty images) are community-identified and organizer-acknowledged as excludable (thread 33891, IDs shared 18 Jul 2026). Already applied: `src/ledger_htr/data/known_issues.py` holds the list, `cv_split.py` excludes them before making folds. The original `Train.csv` stays untouched, as the organizer explicitly required.
+- **Unresolved multi-line labeling ambiguity** (thread 34089, "Must-Read"): some multi-line crops are labeled with only the center/main line's text, others with the full multi-line transcription — no consistent rule, and no organizer resolution was posted as of this check (they asked for example IDs on 5 Aug, last reply 21 Aug still unresolved). Example flagged IDs: `ptuXstzPGsZ5p9Wl`, `Xf53GrwovECETF4H`, `259Ksw56mJJlnipt`, `2KW2WCEcogSZEaxB`. This is real label noise sitting in the training set with no clean fix available yet — worth an EDA pass correlating crop height against transcription word-count to empirically flag likely-affected rows (tall crop + suspiciously short label = candidate for center-line-only labeling), but don't expect to fully resolve it. Revisit if it's still unresolved by the time error analysis (Phase 2/3) is underway.
+
+**Rules confirmations that unblock or reshape parts of this plan:**
+- **Test-image self-supervised pretraining is explicitly allowed** (thread 34459, meganomaly/Zindi, 17 Aug 2026): "Transductive pseudo-labeling / self-training on the test images is allowed, provided the entire process is fully automated." MIM/SSL on raw test pixels (no labels touched) clearly qualifies — it's less aggressive than the pseudo-labeling this ruling explicitly covers. The Should-tier SSL pretraining step no longer needs the "verify first" hedge it had.
+- **StackMix-style augmentation is explicitly allowed** (thread 34514, meganomaly/Zindi, 24 Aug 2026): segmenting character-level crops from the *provided training images only* and recombining them into new synthetic lines (label = concatenation of the source crops' labels) counts as ordinary data augmentation, not "using an external dataset" — provided it's fully automated, train-images-only, and any segmentation tooling used also complies with the pretrained-model rules. This is a genuinely good addition to Phase 3: cheaper and lower-risk than One-DM, and already confirmed compliant. Worth trying before or alongside elastic/affine augmentation, ahead of One-DM.
+- **Excluding clearly-corrupted training rows is allowed**, and so is standard hyperparameter search tooling like Optuna — explicitly distinguished from the AutoML ban (thread 33891, meganomaly/Zindi, 16 Jul 2026).
+- **Renting cloud GPU compute (RunPod/AWS/Nebius/etc.) is allowed** (thread 33870, meganomaly/Zindi, 16 Jul 2026) as long as the data/solution stay private, no proprietary model API or managed model service is used, and the solution stays fully reproducible with documented hardware/runtime. Worth keeping in back pocket if the 12GB laptop becomes a hard bottleneck for the VLM Stretch-tier work — not needed for anything Must/Should-tier.
+
+**Real constraints this plan hadn't fully accounted for:**
+- **Only the competition-provided data may be used for training** — the rules page states this explicitly ("You may use only the datasets provided for this challenge"), confirmed again in an unanswered-but-redundant chat question about MNIST/EMNIST/READ/ICFHR (thread 34612). This matters specifically for HTR-VT: its paper validates on READ2016 and similar external historical-manuscript sets, but we can only use *released pretrained weights* from that lineage if any exist openly — not download and additionally train on READ2016 ourselves. Same applies to any IAM-based augmentation data beyond what a pretrained checkpoint already encodes.
+- **"Openly available to everyone" for pretrained models means license permits commercial use, not just free download.** Confirmed twice (threads 34468 and 34053, meganomaly/Zindi): `stanford-oval/churro-3B` — a 3B VLM fine-tuned specifically for historical-document transcription, which would otherwise have been an excellent Stretch-tier VLM candidate — is explicitly **disallowed** because its Qwen Research License is non-commercial, even though the weights are freely downloadable to anyone. The base `Qwen2.5-VL-3B-Instruct` this plan already lists remains fine (Apache-2.0). `PP-OCRv6 Medium` (Apache-2.0, PaddleOCR's model) was separately confirmed usable (same thread) and is a reasonable addition to the "optional sanity check" row if PyLaia proves inconvenient to set up.
+- **Submission budget is 200 total, not just 5/day.** The Pitfalls section below already covers the 5/day cap; 200 total across the whole 33-day run is generous but not infinite — don't treat submissions as free just because the daily cap resets.
+- The rules page itself is internally inconsistent about the public/private split: the Rules bullet list says 30%/70%, the Submissions section says 20%/80%. Not something we can resolve — just don't be surprised if the actual split doesn't match the 30% figure used elsewhere in this plan.
+
+**Strategy intelligence from the leaderboard's actual top performers:**
+- A competitor scoring just above 0.91 (leaderboard top tier as of this check) described their approach in one line (thread 34350): **"Qwen + LoRA + GRPO and beam search."** GRPO (Group Relative Policy Optimization — the RL fine-tuning technique behind DeepSeek-R1 and similar) is not anywhere in this plan's current Stretch tier, and its appearance in a top score is a real signal that VLM + RL fine-tuning (not just supervised QLoRA) is part of what's separating the top of the leaderboard from the rest. Worth reading up on GRPO specifically before the VLM Stretch-tier week, as a possible upgrade to the plain QLoRA supervised fine-tune already planned — not a replacement for the Must/Should tiers, but a reason to take the VLM Stretch item more seriously if it's reached.
+- The same competitor added: "I think some of the data might be bad and I shouldn't use all the data" — independent confirmation (from someone scoring near the top) that the training-data cleaning work above (corrupted rows, multi-line ambiguity) is a real lever, not a minor footnote.
+
+---
+
 ## The differentiator stack
 
-What most entrants won't try, pulled from papers published in the last 12–18 months and chosen because they actually fit a 6,000-sample archive and one 12GB laptop GPU, not because they're trendy.
+What most entrants won't try, pulled from papers published in the last 12–18 months and chosen because they actually fit a 6,000-sample archive and one 12GB laptop GPU, not because they're trendy. Framed against the tiers above, not as a guaranteed sequence.
 
-**HTR-VT as the anchor model.** An encoder-only ViT with a CNN stem, CTC head, SAM optimizer, and span-mask regularization (Li et al., 2024). Its entire premise is matching CNN-RNN-CTC and TrOCR-scale models *without* needing large external pretraining — a near-perfect fit for this dataset's size, and a build most competitors reaching straight for a Hugging Face checkpoint won't attempt.
+**HTR-VT as the second model (Should-tier).** An encoder-only ViT with a CNN stem, CTC head, SAM optimizer, and span-mask regularization (Li et al., 2024). Its premise is matching CNN-RNN-CTC and TrOCR-scale models *without* needing large external pretraining — a promising fit for this dataset's size on paper, but compare it against the TrOCR baseline on CV rather than assuming it wins; it's also a real implementation-from-repo effort, not a one-line `.from_pretrained()`, so budget real debugging time.
 
-**Domain self-supervised pretraining.** Masked-image-modeling on all 6,000 provided crops — train *and* test pixels, no labels touched — before supervised fine-tuning. Warms the encoder to this exact paper, ink, and penmanship before it ever sees a transcription.
+**Domain self-supervised pretraining (Should-tier, confirmed allowed).** Masked-image-modeling on the provided crops before supervised fine-tuning, including test-image pixels. Confirmed by a Zindi organizer in chat ("Answering queries around pseudo-labelling", meganomaly/Zindi, 17 Aug 2026): "Transductive pseudo-labeling / self-training on the test images is allowed, provided the entire process is fully automated" — MIM/SSL on raw test pixels (no labels touched at all) clearly falls within this, being even less aggressive than the pseudo-labeling that ruling explicitly covers. This warms the encoder to this exact paper, ink, and penmanship before it ever sees a transcription.
 
-**Style-conditioned diffusion synthesis.** One-DM generates realistic handwriting from a single style exemplar via a diffusion model conditioned on high-frequency stroke detail. Condition it on your own training crops to synthesize more examples of the rare letterforms and ligatures early EDA turns up, instead of generic font-rendered synthetic text.
+**Style-conditioned diffusion synthesis (Stretch).** One-DM generates realistic handwriting from a single style exemplar via a diffusion model conditioned on high-frequency stroke detail. Condition it on your own training crops to synthesize more examples of the rare letterforms and ligatures early EDA turns up, instead of generic font-rendered synthetic text. Only worth it once plain augmentation's CV gains have visibly plateaued.
 
-**LLM post-OCR correction — done carefully.** 2025 research on exactly this setup (English, historical documents) found real gains from open LLMs, but only with alignment-based post-processing to strip hallucinated additions, and only once you know whether your ground truth normalizes archaic spelling. Settle that in Phase 1 before betting on this.
+**LLM post-OCR correction — done carefully, and only as a last resort (Stretch).** 2025 research on exactly this setup (English, historical documents) found real gains from open LLMs, but only with alignment-based post-processing to strip hallucinated additions, and only once you know whether your ground truth normalizes archaic spelling (EDA already answered this — see Validation strategy below: the character set is fully modern ASCII, no archaic glyphs). Historical transcription is exact-match sensitive: an LLM correcting "wrong-looking" archaic spelling that's actually correct, or a lexicon snap that mangles a proper noun, actively hurts score. Try a small rule-based confusion-correction layer first (see Technical defaults). Gate every correction change on measured CV improvement; never force every output through it.
 
-**Distillation: ensemble → one lean model.** HTR-JAND (2024) reports a 62% relative CER cut from temperature-scaled soft-label distillation in its ablation. Distill your Phase 4 ensemble into a single compact HTR-VT student — most of the ensemble's accuracy, in one fast, easily-reproducible model. Full recipe below.
+**Distillation: ensemble → one lean model (Stretch, gated on ensemble beating its members).** HTR-JAND (2024) reports a 62% relative CER cut from temperature-scaled soft-label distillation in its ablation — that's evidence the mechanism can work, not a number that transfers exactly to this dataset. Distill your ensemble into a single compact HTR-VT student only if the ensemble has already clearly beaten every individual model on CV. Full recipe below.
 
 ---
 
@@ -166,18 +218,18 @@ Most days carry one **Learn** line and one **Build** line. Weight the split howe
 
 ### Phase 3 — Make the data behave like the archive (Sep 14 – Sep 20)
 
-> With this little real data, pretraining and augmentation are where most of the score is actually won. A published result on a comparably small historical-manuscript set (~4k lines) took CER from 1.93 to 1.60 through augmentation and ensembling alone — treat that as the floor, not the ceiling.
+> With this little real data, pretraining and augmentation are where most of the score is actually won. A published result on a comparably small historical-manuscript set (~4k lines) took CER from 1.93 to 1.60 through augmentation and ensembling alone — treat that as the floor, not the ceiling. Augmentation is Must-tier and unconditional; SSL pretraining is Should-tier and conditional (verify test-image use is allowed first); One-DM (Sat) is Stretch-tier — only run it if augmentation's CV gains have already started to plateau by Thursday/Friday.
 
 **Mon · Sep 14**
 - [ ] **Learn** — MAE paper — the masked-image-modeling recipe you're about to run
-- [ ] **Build** — implement masked-image-modeling self-supervised warm-up on all 6,000 provided crops (train + test pixels, no labels)
+- [ ] **Build** — verify whether the competition rules permit unlabeled test-image use; if yes, implement masked-image-modeling self-supervised warm-up on all 6,000 provided crops (train + test pixels, no labels); if no or unclear, restrict to training crops only
 
 **Tue · Sep 15**
 - [ ] **Build** — finish the SSL pretraining run; load those weights as HTR-VT's encoder init; confirm it trains stably from there
 
 **Wed · Sep 16**
 - [ ] **Learn** — Lilian Weng's diffusion-models explainer, ahead of Saturday's One-DM work
-- [ ] **Build** — add elastic distortion as the primary augmentation (highest single-technique gain in the reference study)
+- [ ] **Build** — add elastic distortion as the first augmentation to try (reported as the strongest single-technique gain in the reference study — verify that holds here before layering on more)
 
 **Thu · Sep 17**
 - [ ] **Build** — layer in random affine, perspective warp, contrast/brightness jitter, and cutout patches, on-the-fly at ~50% per sample
@@ -196,7 +248,7 @@ Most days carry one **Learn** line and one **Build** line. Weight the split howe
 
 ### Phase 4 — A third opinion, then combine (Sep 21 – Sep 27)
 
-> This is the differentiation week — most entrants will stop at a single fine-tuned TrOCR. A VLM fine-tune, careful LLM correction, a proper ensemble, and distilling that ensemble back down are what separate a good score from a winning one.
+> This week is entirely Stretch-tier (see Scope section) — only enter it with a gate already green: the Must+Should tiers are solid on CV and a 2-model ensemble is already beating its members. A VLM fine-tune, careful LLM correction, and distillation are potential differentiators here, not guaranteed ones — each still needs its own gate to clear before it's worth the days it costs.
 
 **Mon · Sep 21**
 - [ ] **Learn** — the LoRA paper and Raschka's practical-tips post on rank/alpha/target-module choices
@@ -261,12 +313,55 @@ Most days carry one **Learn** line and one **Build** line. Weight the split howe
 
 All fit on the laptop 4080's 12GB for line/word-level crops — that card is 12GB GDDR6 at 175W, not the desktop 4080's 16GB, so the VLM row is sized accordingly.
 
-| Family | Why it's here | Watch out for | Role |
-|---|---|---|---|
-| **HTR-VT** (Li et al., 2024) | CNN stem + ViT encoder + CTC head, built specifically to compete without large external pretraining — validated on the historical READ2016 set | You're implementing from a paper/repo, not a one-line `.from_pretrained()` — budget real debugging time | Anchor / differentiator |
-| **TrOCR** (large-handwritten) | Vision transformer + text decoder, pretrained on IAM — strong out-of-the-box handwriting prior, easy HF fine-tuning, architecturally distinct from HTR-VT | Seq2seq decoder can repeat/hallucinate words with too little fine-tuning data; needs matched preprocessing | Ensemble diversity |
-| **CRNN + CTC** (PyLaia-style, optional) | The classic Transkribus/READ-pipeline workhorse — quick to train, a useful sanity check | Largely superseded here by HTR-VT once that's working; keep only for a third, cheap CV opinion | Optional sanity check |
-| **VLM + QLoRA** (Qwen2.5-VL-3B / InternVL2.5-4B) | General visual-text pretraining transfers surprisingly well to messy real handwriting, per recent low-resource-script results | 12GB fits a 3–4B model with 4-bit + LoRA + gradient checkpointing; a 7B model leaves little headroom for batch size — stretch goal, not default | Second differentiator |
+| Family | Why it's here | Watch out for | Role | ~VRAM (typical batch) | ~Time/run (12GB laptop) |
+|---|---|---|---|---|---|
+| **TrOCR-base-handwritten** | Fast, stable, easy HF fine-tuning — the actual Must-tier baseline | Seq2seq decoder can repeat/hallucinate words with too little fine-tuning data; needs matched preprocessing | Baseline | ~4–6GB at bs 16–32, fp16 | ~20–40 min/fold, few epochs |
+| **TrOCR-large-handwritten** | Same lineage, more capacity — only if base's CV clearly has headroom | Meaningfully more VRAM/time than base for a dataset this size; may not pay off | Should-tier upgrade, not default | ~8–10GB at bs 8–16, fp16 | ~1–2 hr/fold |
+| **HTR-VT** (Li et al., 2024) | CNN stem + ViT encoder + CTC head, built to compete without large external pretraining — validated on the historical READ2016 set | Implementing from a paper/repo, not `.from_pretrained()` — budget real debugging time | Should-tier second model | ~4–8GB depending on patch/seq config | ~1–2 hr/fold once stable |
+| **CRNN + CTC** (PyLaia-style, optional) | Classic Transkribus/READ-pipeline workhorse — quick to train, a useful sanity check | Adds a 4th architecture on top of an already ambitious stack — only build if HTR-VT proves genuinely unstable, not as a parallel Day-1 track | Fallback only, not scheduled by default | ~2–4GB | ~20–30 min/fold |
+| **VLM + QLoRA** (Qwen2.5-VL-3B-Instruct base — Apache-2.0, confirmed OK; **not** `stanford-oval/churro-3B`, whose research-only license was organizer-confirmed disallowed despite being freely downloadable) | General visual-text pretraining transfers surprisingly well to messy real handwriting, per recent low-resource-script results — and a top scorer's disclosed approach ("Qwen + LoRA + GRPO") suggests this is genuinely load-bearing for the leaderboard's top tier, not just a diversity play | Prone to plausible-but-wrong hallucinated words on historical handwriting; 12GB fits a 3–4B model with 4-bit + LoRA + gradient checkpointing, a 7B model leaves little headroom for batch size; check any candidate checkpoint's exact license before committing to it | Stretch, but worth taking seriously if reached | ~9–11GB with 4-bit + LoRA + grad checkpointing | Multiple hours/run — budget accordingly |
+
+All figures above are rough planning estimates for this dataset's crop sizes, not measured — confirm actuals once each model is running and adjust batch size/gradient accumulation accordingly.
+
+---
+
+## Validation strategy
+
+Ideally CV folds would be grouped by document/page/writer so the same scribe's handwriting never appears in both train and validation within a fold — random splitting risks the model "learning the writer" rather than generalizing. **Checked directly: this dataset provides no such metadata.** `Train.csv`/`Test.csv` contain only `ID, Target` / `ID`; IDs are opaque random hashes with no discoverable structure; the download manifest lists only the four top-level files. Document-grouped splitting is therefore not implementable as stated — length-stratified 5-fold (already built, see `src/ledger_htr/data/cv_split.py`) is the best split available, not a perfect one.
+
+What partially bounds the risk: exact-duplicate leakage is negligible (only 22/4,098 rows — 0.5% — share an identical `Target` string with another row, confirmed via EDA). Style leakage from *different* lines by the same scribe landing in different folds is real and currently unmeasurable without metadata. If a trained model's CV error looks suspiciously low relative to leaderboard performance, that's the first thing to suspect — cross-check by eye against the Otsu-comparison samples for visually-similar paper/ink clusters that might hint at shared-source pages.
+
+Practical fold-count tip: use fewer folds (e.g. 3) while iterating quickly on architecture/hyperparameters, and only spend the compute on the full 5-fold run for models being seriously compared or selected as finalists.
+
+## Technical defaults
+
+Concrete defaults for the Must/Should-tier build, so each model shares the same assumptions and comparisons stay fair.
+
+**Preprocessing**
+- Resize to a fixed height, pad width dynamically (preserve aspect ratio) — do not force a fixed aspect ratio; EDA measured widths from 267–5,746px on this archive.
+- Bucket samples by width so batches don't waste computation on padding.
+- Carry an explicit padding mask through to attention layers and CTC decoding.
+- Global Otsu binarization is **not sufficient on its own** — EDA's `otsu_comparison.png` shows it turning stained/foxed backgrounds into black blobs on roughly half of a small sample. Use `cv2.adaptiveThreshold` or per-tile Otsu instead if binarization is used at all in the final pipeline (it may not be necessary — test with and without against CV).
+- Images are RGB as provided; if a model's pretrained backbone expects 3-channel input (TrOCR, ImageNet-style CNN stems), keep them RGB or convert to grayscale and replicate to 3 channels — don't silently mismatch what the pretrained weights saw.
+- Character-level vocabulary: EDA already enumerated it — 81 chars, standard ASCII letters/digits/punctuation, no long-s or other archaic glyphs (`reports/eda_findings.md`). Still include an explicit unknown-character token for robustness against anything unseen at test time.
+
+**Training**
+- **CTC timestep check is a correctness requirement, not a nice-to-have**: the encoder's output sequence length must exceed the longest target length (max observed: 120 characters) or CTC loss silently degrades. Assert this explicitly once a model's downsampling factor is fixed, across the actual crop-width distribution — not just the average case.
+- Mixed precision, gradient accumulation, gradient clipping, and checkpoint averaging as defaults, not optional extras.
+- Compare every change against a fixed baseline on the same folds and seeds — no changing two things at once between CV runs.
+- Early-stop on the actual weighted metric (once verified — see Metric section), not on loss alone.
+
+**Augmentation**
+- Validate incrementally: add one technique, check CV, keep or drop, then move to the next — don't stack elastic + affine + perspective + cutout all at once and hope. Mild, archive-realistic transforms first (ink fading/contrast jitter, blur/scan noise, small affine/elastic deformation, slight erosion/dilation); hold off on aggressive perspective warps, large rotations, or cutout masking until validation actually shows they help — those can destroy historically meaningful letterforms rather than just adding noise.
+
+**Decoding & post-processing**
+- Order of increasing risk/complexity: greedy decode → beam search → KenLM rescoring → lexicon constraints. Each step should be justified by a CV improvement over the previous one, not added by default.
+- Never force every prediction onto the nearest lexicon word — proper nouns, place names, and genuinely correct archaic spellings will get mangled. Evaluate error rate on those categories separately before deciding how aggressively to snap.
+- Before reaching for general LLM post-correction (Stretch-tier, see Scope section), try a small rule-based confusion-correction layer targeting known historical OCR confusions (u/v, i/j, long-s-adjacent patterns) — much lower hallucination risk, much easier to validate, and may close most of the gap on its own.
+
+**Ensembling**
+- Combine at the probability level (normalized beam/hypothesis scores), not naive character-level voting.
+- Validate ensemble combination weights on out-of-fold predictions, the same way any other hyperparameter would be tuned.
 
 ---
 
@@ -287,18 +382,29 @@ Start temperature τ around 2–4 and keep γ small early — soft targets are m
 
 ---
 
-## Metric — replicate it exactly, don't approximate
+## Metric — verified, not approximated
 
-Both WER and CER here are length-weighted, not simple averages — an off-the-shelf `jiwer.wer()` call will silently track the wrong thing.
+**This is now fully verified, not assumed.** Two earlier passes through this plan got the formula wrong in different ways — first assuming a 0.7/0.3 CER/WER combination copied from `Starters.zip`'s `eval_metrics.py` defaults, then correctly fixing the combination weight to 0.5/0.5 (per the official rules page) but still assuming a per-sample `sqrt(reference_length)`-weighted average, which turned out to also be wrong. The real formula was reverse-engineered from the Zindi discussion board and confirmed against our own real submission to 8 decimal places — see below.
 
 ```
-weight_i   = sqrt(reference_length_i)          # words for WER, chars for CER
-edits_i    = levenshtein(prediction_i, reference_i)
-score      = sum(edits_i * weight_i) / sum(weight_i * reference_length_i)
-final_score = 0.5 * weighted_WER + 0.5 * weighted_CER
+CER_weighted = sum(char_edit_distance_i for all i) / sum(char_reference_length_i for all i)
+WER_weighted = sum(word_edit_distance_i for all i) / sum(word_reference_length_i for all i)
+final_score  = 1 - 0.5 * (CER_weighted + WER_weighted)
 ```
 
-Longer transcriptions are weighted more heavily (via the square root of their length), so getting a handful of long multi-word crops right matters more than nailing every short single-word one. Build this scorer in Phase 1 and use it — not accuracy, not raw edit distance — as the only number you trust for model selection.
+This is standard **corpus-level (micro-averaged) WER/CER** — total edits across every sample divided by total reference length across every sample — not a per-sample rate averaged across samples. It's algebraically identical to `mean(edit_distance) / mean(reference_length)` over the same set, and it's exactly what the rules page's plain-English description means by "longer reference transcriptions are weighted more heavily": a sample with a longer reference has more room for edits, so it naturally pulls more weight in the corpus-level sum than a short one would in a simple average of per-sample rates. `final_score` is 1 minus that combined error rate, so **higher is better** (matches the leaderboard's sort order — rank 1 has the highest score).
+
+Missing, empty, or invalid predictions are scored as if the prediction were an empty string (maximal edit distance against the reference), not excluded from the corpus sums — per the rules page: "Missing predictions, empty predictions, or invalid text values will be penalised as incorrect."
+
+**How this was confirmed, concretely:**
+1. Zindi discussion "Help Please" (thread 33847, user J0NNY, 4 upvotes, no organizer correction) posted a reverse-engineered snippet: `score = 1 - 0.5 * (wer_weighted/12 + cer_weighted/55)`, where `wer_weighted`/`cer_weighted` are literally the mean edit distance values the leaderboard displays in its "WER Weighted"/"CER Weighted" columns, and 12/55 are the mean reference word/char length of whatever split is being scored (not universal constants — see below).
+2. Our own real submission (Ish1105, 2026-09-04) displayed `WER Weighted: 8.483792682`, `CER Weighted: 30.34969263`, `Public Score: 0.370602341`. Plugging into the formula above: `1 - 0.5*(8.483792682/12 + 30.34969263/55) = 0.370602342` — matches to 8 decimal places.
+3. This also cleanly resolves an earlier mystery: WER Weighted (8.48) looking *smaller* than CER Weighted (30.35) had seemed backwards (a wrong word usually costs more than one wrong character). It isn't backwards — those are raw mean edit-distance *counts*, not rates, and a ~55-char line naturally accumulates more raw character edits than its ~12-word tokenization accumulates word edits.
+4. `evaluations/wer.py` + `cer.py` (the actual source `eval_metrics.py` imports) are still not published anywhere — a direct question about this ("STARTER CODE EVALUATION MODULE", 15 Jul 2026) got zero organizer response. This reverse-engineered formula is our best evidence, verified against real data, not a guess.
+
+The local scorer (`src/ledger_htr/metrics/scorer.py`) implements the general `sum(edits)/sum(lengths)` form directly rather than hardcoding 12/55 — those are just the mean reference lengths of whatever split J0NNY and our submission happened to be scored against (likely the public 20-30% test slice), and hardcoding them would silently give wrong numbers on a local validation fold with different mean lengths. Computing the sums directly makes the scorer self-normalizing to whatever set it's run against.
+
+**Real impact of getting this wrong twice:** the Day 4 TrOCR baseline was originally scored locally at 0.5448 (wrong 0.7/0.3 combination), then 0.5938 (right combination, still-wrong per-sample averaging) — both were error-rate-style numbers (lower looked better) computed against no real reference point. Rerunning the *same* saved checkpoint's validation set through the corrected formula gives **CER=0.4427, WER=0.6982, final=0.4296** (now correctly an accuracy-style number, higher-is-better, matching the leaderboard's Public Score convention). Compared to the actual public leaderboard score of 0.3706, that's a real but modest generalization gap (~0.06, consistent with the mild overfitting already visible in the training curves) — not the alarming near-2x mismatch it looked like before the formula was fixed. That mismatch was mostly a wrong-formula artifact, not a real problem with the model.
 
 ---
 
@@ -315,7 +421,9 @@ Longer transcriptions are weighted more heavily (via the square root of their le
 - **Small LB** — the public leaderboard is a small, noisy slice; a submission that looks worse there can be genuinely better. Select your final two submissions from 5-fold CV, not leaderboard rank.
 - **Empty preds** — missing or empty predictions are scored as flat-out wrong; always run a completeness check against `SampleSubmission.csv` before submitting.
 - **Reproducibility** — top 10 gets a code request with a 48-hour window; a result that doesn't reproduce gets your rank adjusted down to what the code actually produces. Seed everything now, not in Phase 5.
-- **Open-source only** — no AutoML tools, no closed APIs; every pretrained checkpoint and package needs to be genuinely open and available to any other entrant.
+- **Open-source only** — no AutoML tools, no closed APIs; every pretrained checkpoint and package needs to be genuinely open *and* commercially-licensed (research-only licenses like Qwen Research License are explicitly disallowed even when the weights are freely downloadable — see Rules & chat findings above).
+- **Submission budget** — 200 total across the challenge, not just the 5/day cap. Don't burn submissions casually; the daily reset doesn't mean they're free.
+- **Provided data only** — no external training datasets (MNIST, EMNIST, READ2016, IAM, etc.), even though pretrained *weights* from models trained on such data are fine.
 
 ---
 

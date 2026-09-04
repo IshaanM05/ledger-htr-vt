@@ -1,0 +1,16 @@
+# Base experiment config. Copy this per-experiment (e.g. configs/trocr_base_fold0.yaml)
+# rather than editing in place, so past runs stay reproducible from their own file.
+
+run_name: trocr_base
+seed: 42
+fold: 0
+n_folds: 5
+
+model_name: microsoft/trocr-base-handwritten
+target_height: 64
+batch_size: 8
+grad_accum_steps: 2
+lr: 5.0e-5
+num_epochs: 10
+mixed_precision: true
+grad_clip_norm: 1.0

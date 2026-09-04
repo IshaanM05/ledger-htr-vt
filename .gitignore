@@ -7,6 +7,8 @@ checkpoints/*
 !checkpoints/.gitkeep
 external/*
 !external/.gitkeep
+reports/*
+!reports/.gitkeep
 *.zip
 *.pt
 *.pth
