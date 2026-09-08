@@ -17,6 +17,7 @@ reports/*
 *.safetensors
 wandb/
 runs/
+logs/
 lightning_logs/
 outputs/
 

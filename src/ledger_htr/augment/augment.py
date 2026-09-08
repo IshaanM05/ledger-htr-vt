@@ -29,5 +29,22 @@ def build_elastic_transform(target_size: tuple[int, int] = (384, 384), p: float 
     )
 
 
+def build_elastic_transform_raw(p: float = 0.5) -> A.Compose:
+    """Same elastic distortion as build_elastic_transform, minus the square
+    resize — for pipelines (e.g. HTR-VT) that do their own aspect-preserving
+    resize/pad downstream instead of TrOCR's fixed 384x384 processor input."""
+    return A.Compose(
+        [
+            A.ElasticTransform(
+                alpha=40,
+                sigma=6,
+                border_mode=cv2.BORDER_CONSTANT,
+                fill=(255, 255, 255),
+                p=p,
+            ),
+        ]
+    )
+
+
 def apply_transform(image: Image.Image, transform: A.Compose) -> np.ndarray:
     return transform(image=np.array(image))["image"]

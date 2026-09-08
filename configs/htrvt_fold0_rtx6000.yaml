@@ -1,0 +1,29 @@
+# HTR-VT scaled for a 48GB card (RTX 6000-class). Same architecture/recipe as
+# configs/htrvt_fold0.yaml (the 12GB-laptop version) -- just wider images
+# (better CTC-timestep margin for our long lines: 2048/4=512 timesteps vs
+# max target length 120, vs 256 timesteps on the laptop config) and a bigger
+# batch (matches the paper's own READ2016 recipe batch size, train-bs 128).
+# total_iters is scaled down from the paper's 100000 to this dataset's much
+# smaller size (~3.3k rows/fold vs READ2016's much larger set) -- treat as a
+# starting point and watch the val_final curve in metrics.csv, not a fixed
+# target; the best checkpoint is always kept regardless of when it plateaus.
+
+run_name: htrvt_fold0_rtx6000
+seed: 42
+fold: 0
+n_folds: 5
+
+target_height: 64
+max_width: 2048
+train_batch_size: 128
+val_batch_size: 32
+max_lr: 1.0e-3
+weight_decay: 0.5
+warmup_iters: 200
+total_iters: 4000
+eval_every_iters: 100
+print_every_iters: 25
+mask_ratio: 0.4
+max_span_length: 8
+ema_decay: 0.9999
+use_elastic_augment: false

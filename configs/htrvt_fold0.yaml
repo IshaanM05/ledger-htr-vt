@@ -1,0 +1,25 @@
+# HTR-VT (CTC, ViT+ResNet18 encoder) baseline -- the Should-tier second model,
+# architecturally distinct from TrOCR (CTC vs seq2seq) for real ensemble
+# diversity later. Hyperparameters are scaled down from the paper's READ2016
+# recipe (train-bs 128, total-iter 100000) to this dataset's much smaller
+# size (~3.3k train rows per fold vs READ2016's tens of thousands).
+
+run_name: htrvt_fold0
+seed: 42
+fold: 0
+n_folds: 5
+
+target_height: 64
+max_width: 1024
+train_batch_size: 32
+val_batch_size: 8
+max_lr: 1.0e-3
+weight_decay: 0.5
+warmup_iters: 400
+total_iters: 8000
+eval_every_iters: 200
+print_every_iters: 50
+mask_ratio: 0.4
+max_span_length: 8
+ema_decay: 0.9999
+use_elastic_augment: false
