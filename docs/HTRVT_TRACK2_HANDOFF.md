@@ -38,6 +38,62 @@ sandbox is fully reproducible from the checked-in config + seed=42 if it's
 needed again before then. Only `metrics.csv` and the resolved config were
 pulled back locally.
 
+## Next up: self-supervised pretraining pass (not yet run)
+
+The fold-0 result above is from-scratch (random-init) training, and the
+overfitting-past-iter-1700 pattern is consistent with that: the encoder had
+no visual-text prior before ever seeing a transcription. The plan's fix for
+this is multi-dataset supervised pretraining (IAM/RIMES/READ2016/etc.) —
+**that's now confirmed disallowed** by the actual Zindi rules page ("You
+may use only the datasets provided for this challenge"), not just a
+license/attribution nuance. The compliant substitute, already in the plan
+as a separate item, is masked-image-modeling self-supervised pretraining on
+this competition's own 6,000 crops (train+test pixels, no labels touched)
+— fully built now, smoke-tested locally, not yet run for real:
+
+```bash
+PYTHONPATH=src nohup python3 -m ledger_htr.pretrain_htrvt \
+  --config configs/htrvt_pretrain.yaml \
+  > logs/htrvt_pretrain_$(date +%Y%m%d-%H%M%S).log 2>&1 &
+```
+
+`configs/htrvt_pretrain.yaml` trains `HTRMaskedAutoencoder`
+(`src/ledger_htr/models/htr_vt.py`) — the same CNN stem + Transformer trunk
+as `HTRViT`, plus a linear head that reconstructs randomly-masked vertical
+strips of the input image (MSE loss on the masked pixels only). Uses
+**all 5472 images** (train+test IDs from `Train.csv`+`Test.csv`, no
+`Target` column touched — see `ledger_htr.data.pretrain_dataset`), sized
+the same as `configs/htrvt_fold0_rtx6000.yaml` (`target_height=64,
+max_width=2048`) so the pretrained encoder transfers cleanly.
+
+Smoke-test first, same pattern as the fine-tuning run:
+```bash
+PYTHONPATH=src python -m ledger_htr.pretrain_htrvt \
+  --config configs/htrvt_pretrain_smoketest.yaml --max-samples 40
+```
+
+Once pretraining finishes, fine-tune fold 0 from it and compare directly
+against the random-init result above:
+```bash
+PYTHONPATH=src nohup python3 -m ledger_htr.train_htrvt \
+  --config configs/htrvt_fold0_rtx6000_pretrained.yaml \
+  > logs/htrvt_fold0_pretrained_$(date +%Y%m%d-%H%M%S).log 2>&1 &
+```
+`configs/htrvt_fold0_rtx6000_pretrained.yaml` is identical to
+`configs/htrvt_fold0_rtx6000.yaml` except for
+`pretrained_encoder_path: checkpoints/htrvt_pretrain/best/best.pth` — if
+the pretraining run's `run_name` or checkpoint location changed, update
+that path to match before launching, or `load_pretrained_encoder` will
+raise (it errors loudly on a 0-tensor transfer rather than silently
+running from random init anyway).
+
+Report back the same things as before: final `val_recon_loss` from
+pretraining, then `val_cer`/`val_wer`/`val_final` from the fine-tune —
+specifically whether it beats the random-init run's `val_final=0.1207`,
+and whether the overfitting-past-iter-1700 pattern still shows up (if
+pretraining actually gives the encoder something to work with going in,
+the useful-training-length may shift).
+
 ## 0. Status as of this handoff
 
 - Fully **independent implementation** — not a port of the reference repo.

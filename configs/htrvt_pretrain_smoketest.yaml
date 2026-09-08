@@ -1,0 +1,21 @@
+# Throwaway smoke-test config for pretrain_htrvt.py -- tiny iteration count
+# to validate the pipeline (masking, encoder forward, reconstruction loss,
+# checkpoint save) runs end-to-end before committing real GPU time to it.
+
+run_name: htrvt_pretrain_smoketest
+seed: 42
+
+target_height: 64
+max_width: 512
+batch_size: 4
+val_fraction: 0.2
+mask_ratio: 0.4
+num_mask_strips: 2
+max_lr: 1.0e-3
+warmup_iters: 5
+total_iters: 20
+eval_every_iters: 10
+print_every_iters: 5
+use_bf16: true
+num_workers: 0
+pin_memory: false

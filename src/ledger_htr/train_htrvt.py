@@ -12,7 +12,7 @@ from ledger_htr.data.dataset import load_fold_split
 from ledger_htr.data.htrvt_dataset import HTRVTLedgerDataset, build_char_list, htrvt_collate
 from ledger_htr.decode.ctc_codec import CTCCodec
 from ledger_htr.metrics.scorer import final_score_from_dicts
-from ledger_htr.models.htr_vt import create_model
+from ledger_htr.models.htr_vt import create_model, load_pretrained_encoder
 from ledger_htr.optim.sam import SAM
 from ledger_htr.utils.ema import EmaModel
 from ledger_htr.utils.logging import RunLogger
@@ -80,6 +80,14 @@ def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_sample
     model = create_model(nb_classes=codec.num_classes).to(device)
     total_param = sum(p.numel() for p in model.parameters())
     print(f"total params: {total_param:,}")
+    if cfg.pretrained_encoder_path:
+        n_transferred = load_pretrained_encoder(model, cfg.pretrained_encoder_path, device=device)
+        print(f"loaded {n_transferred} pretrained encoder tensors from {cfg.pretrained_encoder_path}")
+        if n_transferred == 0:
+            raise ValueError(
+                f"pretrained_encoder_path={cfg.pretrained_encoder_path!r} transferred 0 tensors -- "
+                "check the checkpoint actually came from pretrain_htrvt.py, not a stale/wrong path"
+            )
     model.train()
     ema = EmaModel(model, cfg.ema_decay)
     ema.ema.to(device)

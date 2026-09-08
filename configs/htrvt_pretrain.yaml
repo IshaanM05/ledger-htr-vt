@@ -1,0 +1,25 @@
+# Masked-image-modeling self-supervised pretraining on ALL 5472 provided
+# crops (train+test images, no labels) -- the rules-compliant substitute
+# for the multi-dataset supervised pretraining the plan originally proposed
+# (IAM/RIMES/READ2016/etc.), which the actual Zindi rules page disallows
+# ("You may use only the datasets provided for this challenge"). Sized for
+# the RTX 6000 molab session, same image dims as configs/htrvt_fold0_rtx6000.yaml
+# so the pretrained encoder transfers cleanly into that fine-tuning run.
+
+run_name: htrvt_pretrain
+seed: 42
+
+target_height: 64
+max_width: 2048
+batch_size: 128
+val_fraction: 0.05
+mask_ratio: 0.4
+num_mask_strips: 4
+max_lr: 1.0e-3
+warmup_iters: 200
+total_iters: 3000
+eval_every_iters: 150
+print_every_iters: 30
+use_bf16: true
+num_workers: 8
+pin_memory: true

@@ -1,0 +1,29 @@
+# Fine-tune fold 0 starting from the self-supervised-pretrained encoder
+# (configs/htrvt_pretrain.yaml) instead of random init -- same hyperparameters
+# as configs/htrvt_fold0_rtx6000.yaml otherwise, so the pretraining pass is
+# the only isolated variable in the comparison against the first (random-init)
+# fold-0 run in docs/HTRVT_FOLD0_RUN_REPORT.md.
+
+run_name: htrvt_fold0_rtx6000_pretrained
+seed: 42
+fold: 0
+n_folds: 5
+
+target_height: 64
+max_width: 2048
+train_batch_size: 128
+val_batch_size: 32
+max_lr: 1.0e-3
+weight_decay: 0.5
+warmup_iters: 200
+total_iters: 2000
+eval_every_iters: 100
+print_every_iters: 25
+mask_ratio: 0.4
+max_span_length: 8
+ema_decay: 0.9999
+use_elastic_augment: false
+use_bf16: true
+num_workers: 8
+pin_memory: true
+pretrained_encoder_path: checkpoints/htrvt_pretrain/best/best.pth

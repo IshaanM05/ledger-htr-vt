@@ -124,3 +124,83 @@ class HTRViT(nn.Module):
 
 def create_model(nb_classes: int) -> HTRViT:
     return HTRViT(nb_classes=nb_classes, embed_dim=768, depth=4, num_heads=6, mlp_ratio=4.0)
+
+
+class HTRMaskedAutoencoder(nn.Module):
+    """Masked-image-modeling pretraining model: the same CNN stem +
+    Transformer trunk as HTRViT (matching submodule names -- `stem`,
+    `blocks`, `norm` -- so `load_pretrained_encoder` below can transfer
+    weights by simple name match), plus a linear reconstruction head instead
+    of a CTC head. Masking happens at the pixel level (see
+    ledger_htr.data.pretrain_dataset.mask_image_strips) rather than the
+    feature-level span-masking HTRViT uses for supervised regularization,
+    since pixel-level masking gives an unambiguous reconstruction target
+    without needing exact patch-to-pixel alignment through the CNN stem's
+    overlapping receptive fields.
+
+    Deliberately NOT sharing a common base class with HTRViT: doing so would
+    nest these submodules under a shared `encoder.*` prefix and change
+    HTRViT's state_dict key names, breaking compatibility with checkpoints
+    already trained against the current key layout (see
+    docs/HTRVT_FOLD0_RUN_REPORT.md). A little duplication here is the
+    deliberate trade for not invalidating that checkpoint."""
+
+    def __init__(
+        self,
+        embed_dim: int = 768,
+        depth: int = 4,
+        num_heads: int = 6,
+        mlp_ratio: float = 4.0,
+        patch_width: int = 4,
+        target_height: int = 64,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.patch_width = patch_width
+        self.target_height = target_height
+        self.stem = HTRConvStem(embed_dim)
+        self.blocks = nn.ModuleList([TransformerBlock(embed_dim, num_heads, mlp_ratio) for _ in range(depth)])
+        self.norm = nn.LayerNorm(embed_dim)
+        self.recon_head = nn.Linear(embed_dim, target_height * patch_width)
+        self._pos_cache: torch.Tensor | None = None
+
+    def _get_pos_embed(self, n: int, device, dtype) -> torch.Tensor:
+        if self._pos_cache is None or self._pos_cache.shape[1] != n or self._pos_cache.device != device:
+            pe = sincos_position_embedding(n, self.embed_dim).to(device=device, dtype=dtype)
+            self._pos_cache = pe.unsqueeze(0)
+        return self._pos_cache
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.stem(x)  # (B, C, H', W'), H'=1, W'=W/4
+        b, c, h, w = feat.shape
+        seq = feat.reshape(b, c, h * w).permute(0, 2, 1)  # (B, N, C)
+        seq = seq + self._get_pos_embed(seq.shape[1], seq.device, seq.dtype)
+        for block in self.blocks:
+            seq = block(seq)
+        seq = self.norm(seq)
+        recon = self.recon_head(seq)  # (B, N, target_height*patch_width)
+        n = recon.shape[1]
+        recon = recon.reshape(b, n, self.target_height, self.patch_width).permute(0, 2, 1, 3)
+        recon = recon.reshape(b, self.target_height, n * self.patch_width)
+        return recon.unsqueeze(1)  # (B, 1, target_height, W) -- same shape as the input image
+
+
+def load_pretrained_encoder(model: HTRViT, checkpoint_path: str, device: str = "cpu") -> int:
+    """Copy the CNN stem + Transformer blocks + final norm from a
+    HTRMaskedAutoencoder pretraining checkpoint into a fresh HTRViT, leaving
+    `mask_token` and `head` at their random initialization (mask_token is
+    specific to supervised span-masking, and head is the task-specific
+    output layer -- neither has a pretraining counterpart to transfer).
+    Returns the number of tensors actually transferred, so the caller can
+    sanity-check it's nonzero rather than silently no-op'ing on a key
+    mismatch."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    source_state = checkpoint["model"] if "model" in checkpoint else checkpoint
+    own_state = model.state_dict()
+    transferred = 0
+    for key, tensor in source_state.items():
+        if key in own_state and (key.startswith("stem.") or key.startswith("blocks.") or key.startswith("norm.")):
+            own_state[key] = tensor
+            transferred += 1
+    model.load_state_dict(own_state)
+    return transferred

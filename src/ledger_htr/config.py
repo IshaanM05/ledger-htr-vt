@@ -61,10 +61,49 @@ class HTRVTConfig:
     use_bf16: bool = True
     num_workers: int = 4
     pin_memory: bool = True
+    pretrained_encoder_path: str | None = None
 
     data_dir: str = os.path.join(REPO_ROOT, "data", "raw")
     image_dir: str = os.path.join(REPO_ROOT, "data", "raw", "images")
     folds_csv: str = os.path.join(REPO_ROOT, "data", "processed", "folds.csv")
+    checkpoint_dir: str = os.path.join(REPO_ROOT, "checkpoints")
+    runs_dir: str = os.path.join(REPO_ROOT, "runs")
+
+    extra: dict = dataclasses.field(default_factory=dict)
+
+
+@dataclasses.dataclass
+class HTRVTPretrainConfig:
+    """Config for the masked-image-modeling self-supervised pretraining pass
+    (src/ledger_htr/pretrain_htrvt.py) -- trains only on pixels (train+test
+    crops, no labels), producing an encoder checkpoint that HTRVTConfig's
+    `pretrained_encoder_path` can load before supervised CTC fine-tuning.
+    embed_dim/depth/num_heads/mlp_ratio are NOT configurable here: they must
+    match ledger_htr.models.htr_vt.create_model()'s architecture exactly for
+    the weight transfer to be meaningful, so they're hardcoded identically
+    in HTRMaskedAutoencoder's defaults instead of exposed as separate fields
+    prone to drifting out of sync."""
+
+    run_name: str
+    seed: int = 42
+
+    target_height: int = 64
+    max_width: int = 1024
+    batch_size: int = 32
+    val_fraction: float = 0.05
+    mask_ratio: float = 0.4
+    num_mask_strips: int = 4
+    max_lr: float = 1e-3
+    warmup_iters: int = 200
+    total_iters: int = 4000
+    eval_every_iters: int = 200
+    print_every_iters: int = 50
+    use_bf16: bool = True
+    num_workers: int = 4
+    pin_memory: bool = True
+
+    data_dir: str = os.path.join(REPO_ROOT, "data", "raw")
+    image_dir: str = os.path.join(REPO_ROOT, "data", "raw", "images")
     checkpoint_dir: str = os.path.join(REPO_ROOT, "checkpoints")
     runs_dir: str = os.path.join(REPO_ROOT, "runs")
 
