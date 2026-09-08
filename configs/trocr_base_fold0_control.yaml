@@ -1,0 +1,20 @@
+# Clean control for the elastic-augmentation A/B: identical hyperparameters
+# to trocr_base_fold0_elastic.yaml, but use_elastic_augment=false, on the
+# CURRENT (corrected) folds.csv -- isolates the augmentation as the only
+# variable, unlike the original trocr_base_fold0 run which used the old
+# pre-corrupted-row-exclusion folds.csv.
+
+run_name: trocr_base_fold0_control
+seed: 42
+fold: 0
+n_folds: 5
+
+model_name: microsoft/trocr-base-handwritten
+target_height: 64
+batch_size: 8
+grad_accum_steps: 2
+lr: 5.0e-5
+num_epochs: 10
+mixed_precision: true
+grad_clip_norm: 1.0
+use_elastic_augment: false

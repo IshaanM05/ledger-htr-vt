@@ -21,6 +21,7 @@ class ExperimentConfig:
     num_epochs: int = 10
     mixed_precision: bool = True
     grad_clip_norm: float = 1.0
+    use_elastic_augment: bool = False
 
     data_dir: str = os.path.join(REPO_ROOT, "data", "raw")
     image_dir: str = os.path.join(REPO_ROOT, "data", "raw", "images")

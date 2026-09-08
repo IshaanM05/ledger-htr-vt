@@ -7,6 +7,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel, get_linear_schedule_with_warmup
 
+from ledger_htr.augment.augment import build_elastic_transform
 from ledger_htr.config import ExperimentConfig, load_config, save_config
 from ledger_htr.data.dataset import LedgerSeq2SeqDataset, load_fold_split
 from ledger_htr.metrics.scorer import final_score_from_dicts
@@ -68,8 +69,11 @@ def train(cfg: ExperimentConfig, max_train_samples: int | None = None, max_val_s
         val_df = val_df.sample(n=min(max_val_samples, len(val_df)), random_state=cfg.seed).reset_index(drop=True)
     print(f"train: {len(train_df)}, val: {len(val_df)}")
 
-    train_ds = LedgerSeq2SeqDataset(train_df, cfg.image_dir, processor)
-    val_ds = LedgerSeq2SeqDataset(val_df, cfg.image_dir, processor)
+    train_transform = build_elastic_transform() if cfg.use_elastic_augment else None
+    if cfg.use_elastic_augment:
+        print("elastic distortion augmentation: ON (train split only)")
+    train_ds = LedgerSeq2SeqDataset(train_df, cfg.image_dir, processor, transform=train_transform)
+    val_ds = LedgerSeq2SeqDataset(val_df, cfg.image_dir, processor)  # always clean, no augmentation
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=2)
 
@@ -84,7 +88,9 @@ def train(cfg: ExperimentConfig, max_train_samples: int | None = None, max_val_s
     logger.log_config(cfg)
     save_config(cfg, os.path.join(logger.run_dir, "resolved_config.yaml"))
 
-    best_final = float("inf")
+    # final_score is accuracy-style (1 - error), higher is better -- see
+    # ledger_htr.metrics.scorer's module docstring for the corrected formula.
+    best_final = float("-inf")
     best_ckpt_dir = os.path.join(cfg.checkpoint_dir, cfg.run_name, "best")
 
     for epoch in range(cfg.num_epochs):
@@ -133,7 +139,7 @@ def train(cfg: ExperimentConfig, max_train_samples: int | None = None, max_val_s
             elapsed_sec=elapsed,
         )
 
-        if val_result["final"] < best_final:
+        if val_result["final"] > best_final:
             best_final = val_result["final"]
             os.makedirs(best_ckpt_dir, exist_ok=True)
             model.save_pretrained(best_ckpt_dir)

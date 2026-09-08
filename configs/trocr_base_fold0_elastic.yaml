@@ -1,0 +1,22 @@
+# Augmentation validation run #1: elastic distortion only, train split.
+# Same hyperparameters as configs/trocr_base_fold0.yaml (the baseline) so the
+# CV comparison isolates the effect of the augmentation, not a config change.
+# Note: folds.csv changed since the baseline ran (21 corrupted rows excluded),
+# so this isn't a perfectly clean A/B against that specific baseline number --
+# but it's close enough, and the true isolated comparison is against a fresh
+# no-augmentation rerun on the current folds.csv if that distinction matters later.
+
+run_name: trocr_base_fold0_elastic
+seed: 42
+fold: 0
+n_folds: 5
+
+model_name: microsoft/trocr-base-handwritten
+target_height: 64
+batch_size: 8
+grad_accum_steps: 2
+lr: 5.0e-5
+num_epochs: 10
+mixed_precision: true
+grad_clip_norm: 1.0
+use_elastic_augment: true
