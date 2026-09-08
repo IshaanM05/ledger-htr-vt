@@ -45,26 +45,55 @@ That's it — no second clone needed (see status note above).
 ## 2. Get the data
 
 `data/` is gitignored (433MB, mostly images — not meant to live in git).
-Two options, pick whichever's faster in the molab environment:
+It's already been uploaded to a **public Google Drive folder** for this
+exact purpose:
 
-- **Re-download from Zindi** directly (competition: "R.O.A.D. Barbados
-  Historic Handwriting Challenge") if the molab session has internet access
-  and Zindi credentials/API access. Needed files: `Train.csv` (4098 rows,
-  `ID,Target`), `Test.csv` (1374 rows, `ID`), `SampleSubmission.csv`, and the
-  `images/` folder (5472 JPEGs, ~433MB total, one `<ID>.jpg` per row across
-  train+test).
-- **Transfer from the local machine** (`rsync`/`scp` from
-  `/home/ishaan/Desktop/ledger-htr-vt/data/raw/`) if that's easier — ask the
-  user for a transfer path/method since this session can't see the molab
-  filesystem.
+```
+https://drive.google.com/drive/folders/1m_Xxg_tbmxBeBCUTxPa_5XugEMIE_IYr?usp=sharing
+```
 
-Whichever way, end up with this layout before continuing:
+That folder ("ZindiOCRDataset") contains exactly four items — pull all four,
+nothing else is needed:
+- `images/` — subfolder, 5472 JPEGs, one `<ID>.jpg` per row across train+test
+- `Train.csv` — 4098 rows, columns `ID,Target`
+- `Test.csv` — 1374 rows, column `ID`
+- `SampleSubmission.csv`
+
+Use whatever Drive access this environment already has (the `gdrive-fsspec`
+package if it's preinstalled, `gdown` against the public folder/file links,
+or a direct browser download in the notebook UI — any method that ends
+with real files on disk is fine, there's no required tool here). Place them
+at exactly this path before continuing:
 ```
 data/raw/Train.csv
 data/raw/Test.csv
 data/raw/SampleSubmission.csv
 data/raw/images/*.jpg
 ```
+
+**Verify before moving on** (don't trust the transfer silently succeeded):
+```bash
+wc -l data/raw/Train.csv data/raw/Test.csv data/raw/SampleSubmission.csv
+# expect: 4099 / 1375 / 1375 lines (each count is rows+1 for the header)
+find data/raw/images -name '*.jpg' | wc -l
+# expect: 5472
+```
+If any of these don't match, the transfer is incomplete or corrupted —
+don't proceed to fold-splitting or training until they do. If the public
+link ever stops working (permissions changed, folder moved), ask the user
+rather than falling back to a guess — the Zindi-redownload and local-rsync
+routes below still work as a backup if needed.
+
+<details>
+<summary>Backup options if the Drive link doesn't work</summary>
+
+- **Re-download from Zindi** directly (competition: "R.O.A.D. Barbados
+  Historic Handwriting Challenge") if this environment has internet access
+  and Zindi credentials/API access.
+- **Transfer from the local machine** (`rsync`/`scp` from
+  `/home/ishaan/Desktop/ledger-htr-vt/data/raw/`) — ask the user for a
+  transfer path/method since this session can't see the local filesystem.
+</details>
 
 ## 3. Regenerate the fold split
 
