@@ -4,6 +4,40 @@ Everything needed to run HTR-VT (this track's anchor model, per the current
 plan — see `docs/plan.md`) on the RTX 6000 session, independent of the
 local 12GB laptop run.
 
+## Result (fold 0, molab RTX 6000, 2026-09-08)
+
+**Run complete.** 4000/4000 iterations, ~90 min wall-clock (~22s/25 iters).
+Best checkpoint: **`val_cer=0.7508`, `val_wer=1.0077`, `val_final=0.1207`
+at iteration 1700** — not the final iteration. Training loss kept dropping
+smoothly to the end (219 → 96), but past iter ~1700 `val_wer` drifted
+upward (1.01 → 1.09) while `val_cer` only inched down further (0.75 →
+0.735), so `val_final` actually *degraded* after its iter-1700 peak (down
+to 0.0888 by iter 4000). This is a real, if modest, overfitting-past-the-
+optimum pattern — the "best" checkpoint-keeping logic already handles this
+correctly (it saved iter 1700's weights, not iter 4000's), but it's worth
+knowing when deciding whether to shorten `total_iters` or add
+regularization for later folds/pretraining runs. Full per-eval curve in
+`runs/htrvt_fold0_rtx6000_molab/metrics.csv` (pulled back to this repo).
+
+Two deviations from the plan below, both while the user was away with
+standing authorization to fix issues and keep going:
+- `num_workers` was bumped from 8 to 16 (per this doc's own note to do so
+  if more cores are free — the sandbox had 20).
+- The run had to be restarted once early on (~iter 150, negligible loss):
+  `nohup python3 -m ...` block-buffers stdout when it's not a TTY, and the
+  script has no `flush=True` calls, so the log looked completely frozen
+  even though the run was healthy. Relaunched with `python3 -u` and the
+  log streamed correctly from then on. Worth adding `flush=True` to the
+  print calls in `train_htrvt.py` directly, or defaulting to `-u`, so this
+  doesn't need rediscovering.
+
+`checkpoints/htrvt_fold0_rtx6000/best/best.pth` (315MB, model + EMA state
+dicts) was left in the molab sandbox rather than transferred back — per
+this doc's own note below, it's not needed until ensembling, and the
+sandbox is fully reproducible from the checked-in config + seed=42 if it's
+needed again before then. Only `metrics.csv` and the resolved config were
+pulled back locally.
+
 ## 0. Status as of this handoff
 
 - Fully **independent implementation** — not a port of the reference repo.

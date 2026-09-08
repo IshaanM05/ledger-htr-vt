@@ -3,10 +3,17 @@
 # (better CTC-timestep margin for our long lines: 2048/4=512 timesteps vs
 # max target length 120, vs 256 timesteps on the laptop config) and a bigger
 # batch (matches the paper's own READ2016 recipe batch size, train-bs 128).
-# total_iters is scaled down from the paper's 100000 to this dataset's much
-# smaller size (~3.3k rows/fold vs READ2016's much larger set) -- treat as a
-# starting point and watch the val_final curve in metrics.csv, not a fixed
-# target; the best checkpoint is always kept regardless of when it plateaus.
+# total_iters was originally 4000 as a starting-point guess; the first real
+# fold-0 run (docs/HTRVT_FOLD0_RUN_REPORT.md, 2026-09-08, random-init, no
+# pretraining) found val_final peaked at iter 1700 (0.1207) then degraded to
+# 0.0888 by iter 4000 -- training loss kept falling the whole time with no
+# corresponding validation gain past ~40% of the run, a real overfitting
+# pattern for this from-scratch recipe on ~3.3k rows/fold. Lowered to 2000
+# (comfortable margin over the observed 1700 peak) to stop paying for the
+# back half of a run that was net-negative -- the best checkpoint is always
+# kept regardless, so this is a compute saving, not a correctness change.
+# Revisit once the multi-dataset pretraining pass (plan-mandated, not yet
+# built) changes the starting point enough that the optimal length shifts.
 
 run_name: htrvt_fold0_rtx6000
 seed: 42
@@ -20,7 +27,7 @@ val_batch_size: 32
 max_lr: 1.0e-3
 weight_decay: 0.5
 warmup_iters: 200
-total_iters: 4000
+total_iters: 2000
 eval_every_iters: 100
 print_every_iters: 25
 mask_ratio: 0.4

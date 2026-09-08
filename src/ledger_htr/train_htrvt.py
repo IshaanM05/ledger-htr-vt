@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import time
 
 import torch
@@ -175,6 +176,12 @@ def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_sample
 
 
 if __name__ == "__main__":
+    # Force line-buffering: stdout is block-buffered by default when it's
+    # not a TTY (e.g. `nohup ... > log.txt`), which silently delays every
+    # print() until the buffer fills or the process exits -- a background
+    # run can look completely frozen while training normally underneath.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/htrvt_fold0.yaml")
     parser.add_argument("--max-train-samples", type=int, default=None)
