@@ -27,3 +27,6 @@ mask_ratio: 0.4
 max_span_length: 8
 ema_decay: 0.9999
 use_elastic_augment: false
+use_bf16: true
+num_workers: 8
+pin_memory: true

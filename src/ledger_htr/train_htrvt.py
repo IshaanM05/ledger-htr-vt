@@ -19,10 +19,18 @@ from ledger_htr.utils.lr_schedule import cosine_lr_with_warmup
 from ledger_htr.utils.seed import set_seed
 
 
-def compute_loss(model, images, texts, codec: CTCCodec, criterion, cfg: HTRVTConfig, device) -> torch.Tensor:
+def compute_loss(
+    model, images, texts, codec: CTCCodec, criterion, cfg: HTRVTConfig, device, autocast_enabled: bool
+) -> torch.Tensor:
     target_flat, target_lengths = codec.encode(texts)
     batch_size = images.size(0)
-    logits = model(images, cfg.mask_ratio, cfg.max_span_length, use_masking=True)
+    # bf16 autocast around the forward pass only -- CTCLoss stays fp32 (the
+    # explicit .float() below), and bf16 needs no GradScaler (unlike fp16,
+    # it has fp32's exponent range so gradients don't need loss-scaling),
+    # which sidesteps having to integrate a scaler with SAM's two-step
+    # ascend/descend update.
+    with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=autocast_enabled):
+        logits = model(images, cfg.mask_ratio, cfg.max_span_length, use_masking=True)
     log_probs = logits.float().permute(1, 0, 2).log_softmax(2)  # (T, B, C) for CTCLoss
     input_lengths = torch.IntTensor([log_probs.size(0)] * batch_size)
 
@@ -33,12 +41,13 @@ def compute_loss(model, images, texts, codec: CTCCodec, criterion, cfg: HTRVTCon
 
 
 @torch.no_grad()
-def run_validation(model, codec: CTCCodec, val_df, val_loader, device) -> dict:
+def run_validation(model, codec: CTCCodec, val_df, val_loader, device, autocast_enabled: bool) -> dict:
     model.eval()
     all_preds: list[str] = []
     for images, _texts in val_loader:
         images = images.to(device)
-        logits = model(images, 0.0, 1, use_masking=False)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=autocast_enabled):
+            logits = model(images, 0.0, 1, use_masking=False)
         preds_index = logits.argmax(2)  # (B, T)
         all_preds.extend(codec.decode_greedy(preds_index.cpu()))
     model.train()
@@ -52,7 +61,8 @@ def run_validation(model, codec: CTCCodec, val_df, val_loader, device) -> dict:
 def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_samples: int | None = None) -> None:
     set_seed(cfg.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device: {device}")
+    autocast_enabled = cfg.use_bf16 and device == "cuda"
+    print(f"device: {device}, bf16 autocast: {autocast_enabled}")
 
     train_csv = os.path.join(cfg.data_dir, "Train.csv")
     train_df, val_df = load_fold_split(train_csv, cfg.folds_csv, cfg.fold)
@@ -79,10 +89,22 @@ def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_sample
     train_ds = HTRVTLedgerDataset(train_df, cfg.image_dir, cfg.target_height, cfg.max_width, transform=train_transform)
     val_ds = HTRVTLedgerDataset(val_df, cfg.image_dir, cfg.target_height, cfg.max_width)  # always clean
     train_loader = DataLoader(
-        train_ds, batch_size=cfg.train_batch_size, shuffle=True, num_workers=2, collate_fn=htrvt_collate
+        train_ds,
+        batch_size=cfg.train_batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        pin_memory=cfg.pin_memory,
+        persistent_workers=cfg.num_workers > 0,
+        collate_fn=htrvt_collate,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=cfg.val_batch_size, shuffle=False, num_workers=2, collate_fn=htrvt_collate
+        val_ds,
+        batch_size=cfg.val_batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=cfg.pin_memory,
+        persistent_workers=cfg.num_workers > 0,
+        collate_fn=htrvt_collate,
     )
 
     def cycle(loader):
@@ -113,10 +135,10 @@ def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_sample
         images, texts = next(train_iter)
         images = images.to(device)
 
-        loss = compute_loss(model, images, texts, codec, criterion, cfg, device)
+        loss = compute_loss(model, images, texts, codec, criterion, cfg, device, autocast_enabled)
         loss.backward()
         optimizer.ascend_step()
-        compute_loss(model, images, texts, codec, criterion, cfg, device).backward()
+        compute_loss(model, images, texts, codec, criterion, cfg, device, autocast_enabled).backward()
         optimizer.descend_step()
         ema.update(model, step=nb_iter // 2)
         running_loss += loss.item()
@@ -129,7 +151,7 @@ def train(cfg: HTRVTConfig, max_train_samples: int | None = None, max_val_sample
             window_start = time.time()
 
         if nb_iter % cfg.eval_every_iters == 0 or nb_iter == cfg.total_iters:
-            val_result = run_validation(ema.ema, codec, val_df, val_loader, device)
+            val_result = run_validation(ema.ema, codec, val_df, val_loader, device, autocast_enabled)
             print(
                 f"[iter {nb_iter}] val_cer={val_result['cer']:.4f} val_wer={val_result['wer']:.4f} "
                 f"val_final={val_result['final']:.4f}"

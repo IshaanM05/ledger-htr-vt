@@ -28,7 +28,14 @@ def _resize_and_pad(arr: np.ndarray, target_height: int, max_width: int) -> np.n
     orig_h, orig_w = arr.shape[:2]
     new_w = min(round(orig_w * target_height / orig_h), max_width)
     new_w = max(new_w, 1)
-    resized = cv2.resize(arr, (new_w, target_height), interpolation=cv2.INTER_AREA)
+    # INTER_AREA is the right choice for shrinking (this dataset's usual case:
+    # mean crop height 135px down to target_height=64) but produces moire/
+    # aliasing artifacts when enlarging -- EDA found crops as short as 34px
+    # tall, which do need upscaling, so pick per-sample rather than hardcoding
+    # one mode for every crop in the dataset.
+    shrinking = target_height <= orig_h
+    interpolation = cv2.INTER_AREA if shrinking else cv2.INTER_LINEAR
+    resized = cv2.resize(arr, (new_w, target_height), interpolation=interpolation)
     if new_w < max_width:
         pad = np.full((target_height, max_width - new_w), 255, dtype=resized.dtype)
         resized = np.concatenate([resized, pad], axis=1)
@@ -40,7 +47,7 @@ class HTRVTLedgerDataset(Dataset):
     fixed height with aspect ratio preserved, then padded/clamped to a fixed
     width. Returns (image_tensor[1,H,W] in [0,1], target_text) — the caller
     (train_htrvt.py) is responsible for CTC label encoding via
-    HTR-VT's own CTCLabelConverter, matching the upstream repo's convention.
+    ledger_htr.decode.ctc_codec.CTCCodec.
 
     `transform` (an albumentations.Compose, e.g. augment.build_elastic_transform_raw)
     is applied to the raw grayscale crop before resize/pad, train-split only."""

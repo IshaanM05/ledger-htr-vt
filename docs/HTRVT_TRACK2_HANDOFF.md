@@ -19,6 +19,16 @@ local 12GB laptop run.
 - Smoke-tested locally (20-iteration run on 40 samples, no shape/dtype
   errors, 39.4M params). Not yet run for real — genuinely new, no prior
   HTR-VT numbers exist on this dataset yet.
+- Verified/optimized before handoff: bf16 autocast on the forward pass
+  (`use_bf16` in the config — no GradScaler needed, so it composes cleanly
+  with SAM's two-step update, unlike fp16), configurable `num_workers`/
+  `pin_memory`/`persistent_workers` on both DataLoaders, and a resize-
+  interpolation fix (`INTER_LINEAR` when upscaling short crops, not
+  `INTER_AREA` for every crop regardless of direction — EDA found crops as
+  short as 34px tall, well under the 64px target). 13 unit tests pass
+  (`tests/test_htrvt.py` covers the CTC codec's encode/decode logic and the
+  model's forward shape/masking; `tests/test_scorer.py` is unrelated,
+  pre-existing).
 - Per the current plan, this is the **anchor model** for this track (not
   Should-tier/optional) — HTR-VT, PARSeq, and later InternVL3 are this
   side's models; TrOCR/Qwen3-VL/PyLaia/PP-OCRv6 belong to the teammate's
@@ -110,7 +120,9 @@ PYTHONPATH=src nohup python -m ledger_htr.train_htrvt \
 
 `configs/htrvt_fold0_rtx6000.yaml` is sized for a 48GB card: batch size 128,
 image width 2048 (256 CTC timesteps' worth of margin over this dataset's
-up-to-120-character transcriptions). `total_iters: 4000` is a starting
+up-to-120-character transcriptions), `num_workers: 8` (bump further if the
+molab sandbox has more CPU cores free — data loading, not the model, is
+the more likely bottleneck at this batch size), `use_bf16: true`. `total_iters: 4000` is a starting
 point, not a hard target — the script always keeps the best checkpoint by
 `val_final` (this project's verified corpus-level metric — see
 `docs/plan.md`'s Metric section for why the generic

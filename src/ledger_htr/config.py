@@ -58,6 +58,9 @@ class HTRVTConfig:
     max_span_length: int = 8
     ema_decay: float = 0.9999
     use_elastic_augment: bool = False
+    use_bf16: bool = True
+    num_workers: int = 4
+    pin_memory: bool = True
 
     data_dir: str = os.path.join(REPO_ROOT, "data", "raw")
     image_dir: str = os.path.join(REPO_ROOT, "data", "raw", "images")
