@@ -11,6 +11,7 @@ this preprocessing.
 
 import argparse
 import os
+import shutil
 
 import pandas as pd
 import torch
@@ -96,6 +97,35 @@ def load_image(image_path: str, input_size: int = 448, max_num: int = 12) -> tor
     return torch.stack([transform(tile) for tile in tiles])
 
 
+_CUSTOM_CODE_FILES = [
+    "configuration_intern_vit.py",
+    "configuration_internvl_chat.py",
+    "conversation.py",
+    "modeling_intern_vit.py",
+    "modeling_internvl_chat.py",
+]
+
+
+def ensure_custom_code_files(checkpoint_dir: str, base_model_id: str = "OpenGVLab/InternVL3-8B") -> None:
+    """InternVL is a trust_remote_code model: its config's `auto_map` points at
+    custom .py files that must sit alongside the weights to load. The
+    fine-tuning script's checkpoint saves (HF Trainer's default save path)
+    don't copy these over, so a checkpoint directory loads the weights fine
+    but fails on `AutoModel.from_pretrained` with a missing-file error. Copy
+    them from the base model's HF cache if they're not already present --
+    idempotent, so safe to call before every load."""
+    if all(os.path.exists(os.path.join(checkpoint_dir, f)) for f in _CUSTOM_CODE_FILES):
+        return
+    from huggingface_hub import snapshot_download
+
+    base_snapshot = snapshot_download(base_model_id, allow_patterns=["*.py"])
+    for fname in _CUSTOM_CODE_FILES:
+        src = os.path.join(base_snapshot, fname)
+        dst = os.path.join(checkpoint_dir, fname)
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
+
+
 def run_inference(
     model_path: str,
     df: pd.DataFrame,
@@ -104,6 +134,8 @@ def run_inference(
     max_new_tokens: int = 128,
     max_num_tiles: int = 12,
 ) -> dict[str, str]:
+    if os.path.isdir(model_path):
+        ensure_custom_code_files(model_path)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
     model = (
         AutoModel.from_pretrained(model_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True)
