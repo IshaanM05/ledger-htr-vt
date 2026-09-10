@@ -50,10 +50,18 @@ def extract_lora_weights(checkpoint_dir: str, out_path: str, extra_trained_prefi
     return result
 
 
+_INTERNVL_REPO_CANDIDATES = (
+    "/root/InternVL/internvl_chat",
+    "external/InternVL/internvl_chat",
+    "InternVL/internvl_chat",
+)
+
+
 def load_lora_weights_into_base_model(
     adapter_path: str,
     base_model_id: str = "OpenGVLab/InternVL3-8B",
     lora_rank: int = 16,
+    internvl_repo_path: str | None = None,
 ):
     """The other half of extract_lora_weights: rebuild a usable fine-tuned
     model from just the small extracted delta file, without ever needing
@@ -63,14 +71,36 @@ def load_lora_weights_into_base_model(
     tensors with strict=False since the file only contains this subset of
     keys (lora_A/B + mlp1.*) -- everything else stays at its base value,
     exactly like loading a peft adapter onto a base model, just via
-    InternVL's own wrap_llm_lora() instead of peft.PeftModel."""
+    InternVL's own wrap_llm_lora() instead of peft.PeftModel.
+
+    `wrap_llm_lora()` is defined in InternVL's own GitHub repo's model class
+    (internvl.model.internvl_chat.InternVLChatModel), NOT in the trimmed
+    trust_remote_code files Hugging Face Hub serves for plain inference --
+    confirmed by hitting `AttributeError: 'InternVLChatModel' object has no
+    attribute 'wrap_llm_lora'` against a plain `AutoModel.from_pretrained`
+    load. Needs `git clone https://github.com/OpenGVLab/InternVL.git`
+    available locally; pass `internvl_repo_path` if it's not at one of the
+    guessed locations."""
+    import sys
+
     import torch
     from safetensors.torch import load_file
-    from transformers import AutoModel
 
-    model = AutoModel.from_pretrained(
-        base_model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
-    )
+    candidates = ([internvl_repo_path] if internvl_repo_path else []) + list(_INTERNVL_REPO_CANDIDATES)
+    repo_path = next((p for p in candidates if p and os.path.isdir(p)), None)
+    if repo_path is None:
+        raise FileNotFoundError(
+            "No local InternVL repo clone found (checked "
+            f"{candidates}) -- wrap_llm_lora() lives there, not in the "
+            "Hugging Face Hub trust_remote_code files. Run: "
+            "git clone https://github.com/OpenGVLab/InternVL.git, then pass "
+            "internvl_repo_path=<path>/InternVL/internvl_chat."
+        )
+    if repo_path not in sys.path:
+        sys.path.insert(0, repo_path)
+    from internvl.model.internvl_chat import InternVLChatModel
+
+    model = InternVLChatModel.from_pretrained(base_model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     model.wrap_llm_lora(r=lora_rank, lora_alpha=2 * lora_rank)
     adapter_weights = load_file(adapter_path)
     missing, unexpected = model.load_state_dict(adapter_weights, strict=False)

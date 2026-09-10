@@ -163,14 +163,26 @@ def run_inference(
         print("nothing left to do -- all IDs already predicted in the existing output file")
         return preds
 
-    if os.path.isdir(model_path):
-        ensure_custom_code_files(model_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
-    model = (
-        AutoModel.from_pretrained(model_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True)
-        .eval()
-        .cuda()
-    )
+    if model_path.endswith(".safetensors"):
+        # Recovery path: model_path is an extracted LoRA-delta file (see
+        # extract_lora_adapter.py), not a full checkpoint directory -- e.g.
+        # after a sandbox reset wiped the original ~16GB merged checkpoint
+        # but the small extracted delta survived. Rebuild from the base
+        # model + this delta instead of loading a directory directly.
+        from ledger_htr.extract_lora_adapter import load_lora_weights_into_base_model
+
+        base_model_id = "OpenGVLab/InternVL3-8B"
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True, use_fast=False)
+        model = load_lora_weights_into_base_model(model_path, base_model_id=base_model_id).eval().cuda()
+    else:
+        if os.path.isdir(model_path):
+            ensure_custom_code_files(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        model = (
+            AutoModel.from_pretrained(model_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True)
+            .eval()
+            .cuda()
+        )
     generation_config = dict(max_new_tokens=max_new_tokens, do_sample=False, num_beams=num_beams)
 
     write_header = not (out_csv and os.path.exists(out_csv) and preds)
