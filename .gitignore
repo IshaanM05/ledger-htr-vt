@@ -1,8 +1,10 @@
 # Data & artifacts
 data/raw/*
 data/processed/*
+data/vlm_finetune/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/vlm_finetune/.gitkeep
 checkpoints/*
 !checkpoints/.gitkeep
 external/*
