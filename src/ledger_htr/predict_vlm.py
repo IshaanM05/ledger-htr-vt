@@ -126,6 +126,16 @@ def ensure_custom_code_files(checkpoint_dir: str, base_model_id: str = "OpenGVLa
             shutil.copy2(src, dst)
 
 
+def load_partial_predictions(out_csv: str) -> dict[str, str]:
+    """Predictions already written by a prior (possibly interrupted) run of
+    this same --out-csv path, keyed by ID -- lets a rerun skip work already
+    done instead of starting over from image 1."""
+    if not os.path.exists(out_csv):
+        return {}
+    partial = pd.read_csv(out_csv, dtype={"ID": str})
+    return dict(zip(partial["ID"], partial["Target"].astype(str)))
+
+
 def run_inference(
     model_path: str,
     df: pd.DataFrame,
@@ -133,7 +143,26 @@ def run_inference(
     num_beams: int = 1,
     max_new_tokens: int = 128,
     max_num_tiles: int = 12,
+    out_csv: str | None = None,
+    resume: bool = True,
 ) -> dict[str, str]:
+    """Runs inference image-by-image, writing each new prediction to
+    `out_csv` immediately (append, flushed) rather than only at the end --
+    a run that takes hours (beam search on the full test set) should not
+    lose all its progress if the process is killed or the sandbox is
+    interrupted partway through. If `out_csv` already has predictions from
+    an earlier attempt at the same path, those IDs are skipped (resume)."""
+    preds: dict[str, str] = {}
+    if out_csv and resume:
+        preds = load_partial_predictions(out_csv)
+        if preds:
+            print(f"resuming: {len(preds)} predictions already in {out_csv}, skipping those IDs")
+
+    remaining = df[~df["ID"].astype(str).isin(preds.keys())]
+    if remaining.empty:
+        print("nothing left to do -- all IDs already predicted in the existing output file")
+        return preds
+
     if os.path.isdir(model_path):
         ensure_custom_code_files(model_path)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
@@ -144,12 +173,28 @@ def run_inference(
     )
     generation_config = dict(max_new_tokens=max_new_tokens, do_sample=False, num_beams=num_beams)
 
-    preds = {}
-    for _, row in df.iterrows():
-        image_path = os.path.join(image_dir, f"{row['ID']}.jpg")
-        pixel_values = load_image(image_path, max_num=max_num_tiles).to(torch.bfloat16).cuda()
-        response = model.chat(tokenizer, pixel_values, TRANSCRIBE_PROMPT, generation_config)
-        preds[str(row["ID"])] = response.strip()
+    write_header = not (out_csv and os.path.exists(out_csv) and preds)
+    csv_file = open(out_csv, "a", newline="") if out_csv else None
+    try:
+        for i, (_, row) in enumerate(remaining.iterrows()):
+            image_path = os.path.join(image_dir, f"{row['ID']}.jpg")
+            pixel_values = load_image(image_path, max_num=max_num_tiles).to(torch.bfloat16).cuda()
+            response = model.chat(tokenizer, pixel_values, TRANSCRIBE_PROMPT, generation_config)
+            text = response.strip()
+            preds[str(row["ID"])] = text
+            if csv_file is not None:
+                if write_header:
+                    csv_file.write("ID,Target\n")
+                    write_header = False
+                escaped = text.replace('"', '""')
+                csv_file.write(f'"{row["ID"]}","{escaped}"\n')
+                csv_file.flush()
+                os.fsync(csv_file.fileno())
+            if (i + 1) % 50 == 0:
+                print(f"  {i + 1}/{len(remaining)} done this run ({len(preds)}/{len(df)} total)")
+    finally:
+        if csv_file is not None:
+            csv_file.close()
     return preds
 
 
@@ -165,6 +210,11 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--out-csv", default=None)
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="ignore any existing --out-csv content and start over instead of skipping already-done IDs",
+    )
     args = parser.parse_args()
 
     image_dir = args.image_dir or os.path.join(args.data_dir, "images")
@@ -180,19 +230,33 @@ def main() -> None:
     if args.max_samples:
         df = df.head(args.max_samples)
 
+    out_csv = args.out_csv or f"submissions/vlm_{args.mode}_predictions.csv"
+    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+    if args.no_resume and os.path.exists(out_csv):
+        os.remove(out_csv)
+
     print(f"running inference on {len(df)} images (mode={args.mode}, num_beams={args.num_beams})")
-    preds = run_inference(args.model_path, df, image_dir, num_beams=args.num_beams, max_new_tokens=args.max_new_tokens)
+    preds = run_inference(
+        args.model_path,
+        df,
+        image_dir,
+        num_beams=args.num_beams,
+        max_new_tokens=args.max_new_tokens,
+        out_csv=out_csv,
+        resume=not args.no_resume,
+    )
+
+    # predictions are already written incrementally by run_inference (see
+    # its docstring) -- no final bulk write needed, just verify completeness.
+    missing = set(df["ID"].astype(str)) - set(preds.keys())
+    if missing:
+        raise RuntimeError(f"{len(missing)} IDs never got a prediction (e.g. {list(missing)[:5]}) -- {out_csv} is incomplete")
+    print(f"wrote {len(preds)} predictions -> {out_csv}")
 
     if args.mode == "val":
         refs = dict(zip(df["ID"].astype(str), df["Target"].astype(str)))
         result = final_score_from_dicts(preds, refs)
         print(f"val_cer={result['cer']:.4f} val_wer={result['wer']:.4f} val_final={result['final']:.4f}")
-
-    out_csv = args.out_csv or f"submissions/vlm_{args.mode}_predictions.csv"
-    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
-    out_df = pd.DataFrame({"ID": df["ID"].astype(str), "Target": [preds[i] for i in df["ID"].astype(str)]})
-    out_df.to_csv(out_csv, index=False)
-    print(f"wrote {len(out_df)} predictions -> {out_csv}")
 
 
 if __name__ == "__main__":
