@@ -15,12 +15,21 @@ import os
 from safetensors.torch import load_file, save_file
 
 
-def extract_lora_weights(checkpoint_dir: str, out_path: str) -> dict:
+def extract_lora_weights(checkpoint_dir: str, out_path: str, extra_trained_prefixes: tuple[str, ...] = ("mlp1.",)) -> dict:
+    """`extra_trained_prefixes` covers parameters that were fully fine-tuned
+    rather than LoRA-wrapped (e.g. this project's runs use --freeze_mlp False,
+    so the mlp1 vision-to-language projector is directly trained, not just
+    the LoRA_A/B deltas) -- without these, the extracted file would silently
+    be missing part of what actually changed from the base model."""
     index_path = os.path.join(checkpoint_dir, "model.safetensors.index.json")
     with open(index_path) as f:
         index = json.load(f)
     weight_map = index["weight_map"]
-    lora_keys = [k for k in weight_map if "lora_A" in k or "lora_B" in k]
+    lora_keys = [
+        k
+        for k in weight_map
+        if "lora_A" in k or "lora_B" in k or any(k.startswith(p) for p in extra_trained_prefixes)
+    ]
     if not lora_keys:
         raise ValueError(f"no lora_A/lora_B tensors found in {index_path} -- wrong checkpoint, or not a LoRA run?")
 
